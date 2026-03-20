@@ -3,14 +3,14 @@ const express  = require('express');
 const cors     = require('cors');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
- 
+
 const app  = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
- 
+
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
- 
+
 /* ── EMAIL TRANSPORTER ── */
 const mailer = nodemailer.createTransport({
   host:   process.env.SMTP_HOST,
@@ -21,7 +21,7 @@ const mailer = nodemailer.createTransport({
     pass: process.env.SMTP_PASS,
   },
 });
- 
+
 /* ── INIT DB ── */
 async function initDB() {
   await pool.query(`
@@ -31,6 +31,7 @@ async function initDB() {
       lname      TEXT NOT NULL,
       dob        TEXT NOT NULL,
       ssn        TEXT NOT NULL,
+      phone      TEXT,
       credit     TEXT NOT NULL,
       biz_name   TEXT NOT NULL,
       ein        TEXT NOT NULL,
@@ -40,28 +41,28 @@ async function initDB() {
   `);
   console.log('DB ready');
 }
- 
+
 /* ══════════════════════════════════════
    POST /apply  — receive form submission
 ══════════════════════════════════════ */
 app.post('/apply', async (req, res) => {
-  const { fname, lname, dob, ssn, credit, biz_name, ein, source } = req.body;
- 
+  const { fname, lname, dob, ssn, credit, phone, biz_name, ein, source } = req.body;
+
   /* Basic validation */
   if (!fname || !lname || !dob || !ssn || !credit || !biz_name || !ein) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
- 
+
   try {
     /* Save to Postgres */
     const result = await pool.query(
-      `INSERT INTO applications (fname, lname, dob, ssn, credit, biz_name, ein, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, created_at`,
-      [fname, lname, dob, ssn, credit, biz_name, ein, source || 'sms-campaign']
+      `INSERT INTO applications (fname, lname, dob, ssn, credit, phone, biz_name, ein, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
+      [fname, lname, dob, ssn, credit, phone || '', biz_name, ein, source || 'sms-campaign']
     );
- 
+
     const { id, created_at } = result.rows[0];
- 
+
     /* Send email notification */
     await mailer.sendMail({
       from:    `"RCN Group Leads" <${process.env.SMTP_USER}>`,
@@ -74,21 +75,22 @@ app.post('/apply', async (req, res) => {
           </div>
           <div style="padding:24px;">
             <p style="color:#555;font-size:13px;margin:0 0 20px;">Submitted ${new Date(created_at).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET · Application #${id}</p>
- 
+
             <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#999;margin:0 0 10px;">Owner</h3>
             <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:14px;">
               <tr><td style="padding:6px 0;color:#999;width:40%;">Name</td><td style="padding:6px 0;color:#111;font-weight:500;">${fname} ${lname}</td></tr>
               <tr><td style="padding:6px 0;color:#999;">Date of Birth</td><td style="padding:6px 0;color:#111;">${dob}</td></tr>
               <tr><td style="padding:6px 0;color:#999;">SSN</td><td style="padding:6px 0;color:#111;font-family:monospace;">${maskSSN(ssn)}</td></tr>
+              <tr><td style="padding:6px 0;color:#999;">Phone</td><td style="padding:6px 0;color:#111;">${phone || '—'}</td></tr>
               <tr><td style="padding:6px 0;color:#999;">Credit Score</td><td style="padding:6px 0;color:#111;">${credit}</td></tr>
             </table>
- 
+
             <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#999;margin:0 0 10px;">Business</h3>
             <table style="width:100%;border-collapse:collapse;font-size:14px;">
               <tr><td style="padding:6px 0;color:#999;width:40%;">Business Name</td><td style="padding:6px 0;color:#111;font-weight:500;">${biz_name}</td></tr>
               <tr><td style="padding:6px 0;color:#999;">EIN</td><td style="padding:6px 0;color:#111;font-family:monospace;">${maskEIN(ein)}</td></tr>
             </table>
- 
+
             <div style="margin-top:24px;padding:14px 16px;background:#f9f6f0;border-radius:6px;font-size:13px;color:#666;">
               Source: <strong>${source || 'sms-campaign'}</strong>
             </div>
@@ -96,38 +98,40 @@ app.post('/apply', async (req, res) => {
         </div>
       `,
     });
- 
+
     res.json({ success: true, id });
- 
+
   } catch (err) {
     console.error('Submit error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
- 
+
 /* ══════════════════════════════════════
    GET /admin  — password-protected dashboard
 ══════════════════════════════════════ */
 app.get('/admin', basicAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, fname, lname, dob, credit, biz_name, ein, source, created_at
+      `SELECT id, fname, lname, dob, ssn, credit, phone, biz_name, ein, created_at
        FROM applications ORDER BY created_at DESC`
     );
- 
+
     const rows_html = rows.map(r => `
       <tr>
         <td>${r.id}</td>
         <td><strong>${r.fname} ${r.lname}</strong></td>
         <td>${r.dob}</td>
+        <td>${r.phone || '—'}</td>
+        <td class="mono">${r.ssn}</td>
         <td><span class="badge badge-${creditClass(r.credit)}">${r.credit}</span></td>
         <td>${r.biz_name}</td>
-        <td class="mono">${r.ssn}</td><td class="mono">${r.ein}</td>
+        <td class="mono">${r.ein}</td>
         
         <td>${new Date(r.created_at).toLocaleString('en-US', { timeZone: 'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })}</td>
       </tr>
     `).join('');
- 
+
     res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -187,7 +191,7 @@ app.get('/admin', basicAuth, async (req, res) => {
       <div class="stat-value">${rows.filter(r => { const d = new Date(r.created_at); const now = new Date(); return (now - d) < 7 * 86400000; }).length}</div>
     </div>
   </div>
- 
+
   <div class="card">
     <div class="card-header">
       <h2>Applications</h2>
@@ -197,7 +201,7 @@ app.get('/admin', basicAuth, async (req, res) => {
       ? '<div class="empty">No applications yet. Share your landing page link to start collecting leads.</div>'
       : `<div style="overflow-x:auto"><table>
           <thead><tr>
-            <th>#</th><th>Name</th><th>DOB</th><th>SSN</th><th>Credit</th><th>Business</th><th>EIN</th><th>Submitted</th>
+            <th>#</th><th>Name</th><th>DOB</th><th>Phone</th><th>SSN</th><th>Credit</th><th>Business</th><th>EIN</th><th>Submitted</th>
           </tr></thead>
           <tbody>${rows_html}</tbody>
         </table></div>`
@@ -211,23 +215,23 @@ app.get('/admin', basicAuth, async (req, res) => {
     res.status(500).send('Server error');
   }
 });
- 
+
 /* ── HELPERS ── */
 function maskSSN(ssn) {
   return ssn ? '***-**-' + ssn.slice(-4) : '—';
 }
- 
+
 function maskEIN(ein) {
   return ein ? '**-***' + ein.slice(-4) : '—';
 }
- 
+
 function creditClass(score) {
   if (!score) return 'mid';
   if (['650 – 699','700 – 749','750+'].includes(score)) return 'good';
   if (['600 – 649','550 – 599'].includes(score)) return 'mid';
   return 'low';
 }
- 
+
 function basicAuth(req, res, next) {
   const auth = req.headers['authorization'];
   if (!auth || !auth.startsWith('Basic ')) return challenge(res);
@@ -235,15 +239,15 @@ function basicAuth(req, res, next) {
   if (user === process.env.ADMIN_USER && pass === process.env.ADMIN_PASS) return next();
   return challenge(res);
 }
- 
+
 function challenge(res) {
   res.set('WWW-Authenticate', 'Basic realm="RCN Admin"');
   res.status(401).send('Unauthorized');
 }
- 
+
 /* ── HEALTH CHECK ── */
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'rcn-apply-backend' }));
- 
+
 /* ── START ── */
 const PORT = process.env.PORT || 3000;
 initDB().then(() => {
