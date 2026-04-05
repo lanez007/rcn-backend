@@ -1,4 +1,4 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 const express  = require('express');
 const cors     = require('cors');
 const { Pool } = require('pg');
@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-/* ── EMAIL TRANSPORTER ── */
+/* â”€â”€ EMAIL TRANSPORTER â”€â”€ */
 const mailer = nodemailer.createTransport({
   host:   process.env.SMTP_HOST,
   port:   Number(process.env.SMTP_PORT) || 587,
@@ -22,7 +22,7 @@ const mailer = nodemailer.createTransport({
   },
 });
 
-/* ── INIT DB ── */
+/* â”€â”€ INIT DB â”€â”€ */
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS applications (
@@ -39,12 +39,13 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(CREATE TABLE IF NOT EXISTS plaid_tokens (id SERIAL PRIMARY KEY, applicant_name TEXT, access_token TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()));
   console.log('DB ready');
 }
 
-/* ══════════════════════════════════════
-   POST /apply  — receive form submission
-══════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   POST /apply  â€” receive form submission
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 app.post('/apply', async (req, res) => {
   const { fname, lname, dob, ssn, credit, phone, biz_name, ein, source } = req.body;
 
@@ -67,21 +68,21 @@ app.post('/apply', async (req, res) => {
     await mailer.sendMail({
       from:    `"RCN Group Leads" <${process.env.SMTP_USER}>`,
       to:      process.env.NOTIFY_EMAIL,
-      subject: `New Application #${id} — ${fname} ${lname} | ${biz_name}`,
+      subject: `New Application #${id} â€” ${fname} ${lname} | ${biz_name}`,
       html: `
         <div style="font-family:sans-serif;max-width:560px;margin:0 auto;border:1px solid #e5e5e5;border-radius:8px;overflow:hidden;">
           <div style="background:#0a0f1e;padding:20px 24px;">
-            <span style="color:#c9a84c;font-weight:600;font-size:16px;">RCN Group — New Application</span>
+            <span style="color:#c9a84c;font-weight:600;font-size:16px;">RCN Group â€” New Application</span>
           </div>
           <div style="padding:24px;">
-            <p style="color:#555;font-size:13px;margin:0 0 20px;">Submitted ${new Date(created_at).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET · Application #${id}</p>
+            <p style="color:#555;font-size:13px;margin:0 0 20px;">Submitted ${new Date(created_at).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET Â· Application #${id}</p>
 
             <h3 style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#999;margin:0 0 10px;">Owner</h3>
             <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:14px;">
               <tr><td style="padding:6px 0;color:#999;width:40%;">Name</td><td style="padding:6px 0;color:#111;font-weight:500;">${fname} ${lname}</td></tr>
               <tr><td style="padding:6px 0;color:#999;">Date of Birth</td><td style="padding:6px 0;color:#111;">${dob}</td></tr>
               <tr><td style="padding:6px 0;color:#999;">SSN</td><td style="padding:6px 0;color:#111;font-family:monospace;">${maskSSN(ssn)}</td></tr>
-              <tr><td style="padding:6px 0;color:#999;">Phone</td><td style="padding:6px 0;color:#111;">${phone || '—'}</td></tr>
+              <tr><td style="padding:6px 0;color:#999;">Phone</td><td style="padding:6px 0;color:#111;">${phone || 'â€”'}</td></tr>
               <tr><td style="padding:6px 0;color:#999;">Credit Score</td><td style="padding:6px 0;color:#111;">${credit}</td></tr>
             </table>
 
@@ -107,9 +108,9 @@ app.post('/apply', async (req, res) => {
   }
 });
 
-/* ══════════════════════════════════════
-   GET /admin  — password-protected dashboard
-══════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   GET /admin  â€” password-protected dashboard
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 app.get('/admin', basicAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -122,7 +123,7 @@ app.get('/admin', basicAuth, async (req, res) => {
         <td>${r.id}</td>
         <td><strong>${r.fname} ${r.lname}</strong></td>
         <td>${r.dob}</td>
-        <td>${r.phone || '—'}</td>
+        <td>${r.phone || 'â€”'}</td>
         <td class="mono">${r.ssn}</td>
         <td><span class="badge badge-${creditClass(r.credit)}">${r.credit}</span></td>
         <td>${r.biz_name}</td>
@@ -184,7 +185,7 @@ app.get('/admin', basicAuth, async (req, res) => {
     </div>
     <div class="stat">
       <div class="stat-label">Credit 650+</div>
-      <div class="stat-value">${rows.filter(r => ['650 – 699','700 – 749','750+'].includes(r.credit)).length}</div>
+      <div class="stat-value">${rows.filter(r => ['650 â€“ 699','700 â€“ 749','750+'].includes(r.credit)).length}</div>
     </div>
     <div class="stat">
       <div class="stat-label">This Week</div>
@@ -216,19 +217,19 @@ app.get('/admin', basicAuth, async (req, res) => {
   }
 });
 
-/* ── HELPERS ── */
+/* â”€â”€ HELPERS â”€â”€ */
 function maskSSN(ssn) {
-  return ssn ? '***-**-' + ssn.slice(-4) : '—';
+  return ssn ? '***-**-' + ssn.slice(-4) : 'â€”';
 }
 
 function maskEIN(ein) {
-  return ein ? '**-***' + ein.slice(-4) : '—';
+  return ein ? '**-***' + ein.slice(-4) : 'â€”';
 }
 
 function creditClass(score) {
   if (!score) return 'mid';
-  if (['650 – 699','700 – 749','750+'].includes(score)) return 'good';
-  if (['600 – 649','550 – 599'].includes(score)) return 'mid';
+  if (['650 â€“ 699','700 â€“ 749','750+'].includes(score)) return 'good';
+  if (['600 â€“ 649','550 â€“ 599'].includes(score)) return 'mid';
   return 'low';
 }
 
@@ -245,11 +246,16 @@ function challenge(res) {
   res.status(401).send('Unauthorized');
 }
 
-/* ── HEALTH CHECK ── */
+/* â”€â”€ HEALTH CHECK â”€â”€ */
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'rcn-apply-backend' }));
 
-/* ── START ── */
+
+/* -- START -- */
 const PORT = process.env.PORT || 3000;
+require('./plaid')(app, pool);
+
 initDB().then(() => {
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
+
+

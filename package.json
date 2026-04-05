@@ -11,7 +11,8 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "nodemailer": "^6.9.7",
-    "pg": "^8.11.3"
+    "pg": "^8.11.3",
+    "plaid": "^41.4.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
