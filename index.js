@@ -11,6 +11,8 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+const STATUSES = ['NEW','QUALIFIED','DNQ','CONTACTED','SUBMITTED','FUNDED','NOT INTERESTED'];
+
 /* ── EMAIL TRANSPORTER ── */
 const mailer = nodemailer.createTransport({
   host:   process.env.SMTP_HOST,
@@ -39,6 +41,7 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE applications ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'NEW'`);
   await pool.query(`CREATE TABLE IF NOT EXISTS plaid_tokens (id SERIAL PRIMARY KEY, applicant_name TEXT, access_token TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
   console.log('DB ready');
 }
@@ -114,23 +117,27 @@ app.post('/apply', async (req, res) => {
 app.get('/admin', basicAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, fname, lname, dob, ssn, credit, phone, biz_name, ein, created_at
+      `SELECT id, fname, lname, dob, ssn, credit, phone, biz_name, ein, status, created_at
        FROM applications ORDER BY created_at DESC`
     );
 
-    const rows_html = rows.map(r => `
-      <tr>
+    const rows_html = rows.map(r => {
+      const status = STATUSES.includes(r.status) ? r.status : 'NEW';
+      return `
+      <tr data-id="${r.id}" data-status="${status}">
         <td>${r.id}</td>
         <td><strong>${r.fname} ${r.lname}</strong></td>
         <td>${r.dob}</td>
         <td>${r.phone || '–'}</td>
         <td class="mono">${r.ssn}</td>
         <td><span class="badge badge-${creditClass(r.credit)}">${r.credit}</span></td>
+        <td><span class="status-wrap"><span class="status-pill" data-status="${status}">${status === 'FUNDED' ? '🏆 ' : ''}${status}</span></span></td>
         <td>${r.biz_name}</td>
         <td class="mono">${r.ein}</td>
         <td>${new Date(r.created_at).toLocaleString('en-US', { timeZone: 'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })}</td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
 
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -165,6 +172,28 @@ app.get('/admin', basicAuth, async (req, res) => {
   .badge-mid  { background: #faeeda; color: #854f0b; }
   .badge-low  { background: #fcebeb; color: #a32d2d; }
   .empty { text-align: center; padding: 48px; color: #999; font-size: 14px; }
+
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 20px; border-bottom: 1px solid #f0ece3; background: #fff; }
+  .tab { background: #faf8f5; border: 1px solid #e5e0d8; border-radius: 50px; padding: 6px 14px; font-size: 12px; font-weight: 600; color: #555; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; font-family: inherit; }
+  .tab:hover { background: #f0ece3; }
+  .tab.active { background: #0a0f1e; color: #c9a84c; border-color: #0a0f1e; }
+  .tab .count { background: rgba(0,0,0,0.08); border-radius: 50px; padding: 1px 8px; font-size: 11px; font-weight: 700; min-width: 18px; text-align: center; }
+  .tab.active .count { background: rgba(201,168,76,0.18); color: #c9a84c; }
+
+  .status-wrap { position: relative; display: inline-block; }
+  .status-pill { display: inline-flex; align-items: center; gap: 3px; padding: 3px 10px; border-radius: 50px; font-size: 11px; font-weight: 600; color: #fff; cursor: pointer; user-select: none; white-space: nowrap; }
+  .status-pill:hover { opacity: 0.88; }
+  .status-pill[data-status="NEW"] { background: #7a7068; }
+  .status-pill[data-status="QUALIFIED"] { background: #0a8a4a; }
+  .status-pill[data-status="DNQ"] { background: #cc2244; }
+  .status-pill[data-status="CONTACTED"] { background: #1a5fa8; }
+  .status-pill[data-status="SUBMITTED"] { background: #6655aa; }
+  .status-pill[data-status="FUNDED"] { background: #0a8a4a; }
+  .status-pill[data-status="NOT INTERESTED"] { background: #9a9088; }
+
+  .status-dropdown { position: absolute; top: calc(100% + 4px); left: 0; background: #fff; border: 1px solid #e5e0d8; border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.12); z-index: 20; min-width: 160px; padding: 4px; }
+  .status-dropdown .opt { padding: 6px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 600; color: #fff; margin: 2px 0; display: flex; align-items: center; gap: 4px; }
+  .status-dropdown .opt:hover { opacity: 0.88; }
 </style>
 </head>
 <body>
@@ -197,22 +226,173 @@ app.get('/admin', basicAuth, async (req, res) => {
       <h2>Applications</h2>
       <small>Newest first &mdash; All times ET</small>
     </div>
-    ${rows.length === 0
-      ? '<div class="empty">No applications yet. Share your landing page link to start collecting leads.</div>'
-      : `<div style="overflow-x:auto"><table>
-          <thead><tr>
-            <th>#</th><th>Name</th><th>DOB</th><th>Phone</th><th>SSN</th><th>Credit</th><th>Business</th><th>EIN</th><th>Submitted</th>
-          </tr></thead>
-          <tbody>${rows_html}</tbody>
-        </table></div>`
-    }
+    <div class="tabs" id="status-tabs">
+      <div class="tab" data-tab="ALL">ALL <span class="count">0</span></div>
+      <div class="tab" data-tab="NEW">NEW <span class="count">0</span></div>
+      <div class="tab" data-tab="QUALIFIED">QUALIFIED <span class="count">0</span></div>
+      <div class="tab" data-tab="DNQ">DNQ <span class="count">0</span></div>
+      <div class="tab" data-tab="CONTACTED">CONTACTED <span class="count">0</span></div>
+      <div class="tab" data-tab="SUBMITTED">SUBMITTED <span class="count">0</span></div>
+      <div class="tab" data-tab="FUNDED">FUNDED <span class="count">0</span></div>
+      <div class="tab" data-tab="NOT INTERESTED">NOT INTERESTED <span class="count">0</span></div>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr>
+        <th>#</th><th>Name</th><th>DOB</th><th>Phone</th><th>SSN</th><th>Credit</th><th>Status</th><th>Business</th><th>EIN</th><th>Submitted</th>
+      </tr></thead>
+      <tbody>${rows_html}</tbody>
+    </table></div>
+    <div id="empty-all" class="empty" style="display:${rows.length === 0 ? 'block' : 'none'}">No applications yet. Share your landing page link to start collecting leads.</div>
+    <div id="empty-filter" class="empty" style="display:none">No applications match this filter.</div>
   </div>
 </div>
+<script>
+(function() {
+  var STATUSES = ['NEW','QUALIFIED','DNQ','CONTACTED','SUBMITTED','FUNDED','NOT INTERESTED'];
+  var COLORS = { 'NEW':'#7a7068','QUALIFIED':'#0a8a4a','DNQ':'#cc2244','CONTACTED':'#1a5fa8','SUBMITTED':'#6655aa','FUNDED':'#0a8a4a','NOT INTERESTED':'#9a9088' };
+  var TAB_KEY = 'sbf_admin_status_tab';
+
+  function getActiveTab() {
+    var saved = localStorage.getItem(TAB_KEY);
+    if (saved === 'ALL' || STATUSES.indexOf(saved) !== -1) return saved;
+    return 'NEW';
+  }
+
+  function pillLabel(s) { return s === 'FUNDED' ? '🏆 ' + s : s; }
+
+  function updateCounts() {
+    var counts = { ALL: 0 };
+    STATUSES.forEach(function(s) { counts[s] = 0; });
+    document.querySelectorAll('tbody tr').forEach(function(tr) {
+      counts.ALL++;
+      var s = tr.dataset.status;
+      if (counts[s] !== undefined) counts[s]++;
+    });
+    document.querySelectorAll('.tab').forEach(function(t) {
+      var c = t.querySelector('.count');
+      if (c) c.textContent = counts[t.dataset.tab] || 0;
+    });
+  }
+
+  function applyFilter(tab) {
+    var anyVisible = false;
+    document.querySelectorAll('tbody tr').forEach(function(tr) {
+      var show = (tab === 'ALL' || tr.dataset.status === tab);
+      tr.style.display = show ? '' : 'none';
+      if (show) anyVisible = true;
+    });
+    var total = document.querySelectorAll('tbody tr').length;
+    var emptyAll = document.getElementById('empty-all');
+    var emptyFilter = document.getElementById('empty-filter');
+    if (total === 0) {
+      emptyAll.style.display = 'block';
+      emptyFilter.style.display = 'none';
+    } else {
+      emptyAll.style.display = 'none';
+      emptyFilter.style.display = anyVisible ? 'none' : 'block';
+    }
+  }
+
+  function setActiveTab(tab) {
+    localStorage.setItem(TAB_KEY, tab);
+    document.querySelectorAll('.tab').forEach(function(t) {
+      t.classList.toggle('active', t.dataset.tab === tab);
+    });
+    applyFilter(tab);
+  }
+
+  function closeDropdowns() {
+    document.querySelectorAll('.status-dropdown').forEach(function(d) { d.remove(); });
+  }
+
+  function openDropdown(pill) {
+    closeDropdowns();
+    var wrap = pill.parentElement;
+    var dd = document.createElement('div');
+    dd.className = 'status-dropdown';
+    STATUSES.forEach(function(s) {
+      var o = document.createElement('div');
+      o.className = 'opt';
+      o.textContent = pillLabel(s);
+      o.style.background = COLORS[s];
+      o.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        changeStatus(pill, s);
+        closeDropdowns();
+      });
+      dd.appendChild(o);
+    });
+    wrap.appendChild(dd);
+  }
+
+  function changeStatus(pill, status) {
+    var tr = pill.closest('tr');
+    var id = tr.dataset.id;
+    var prev = pill.dataset.status;
+    pill.dataset.status = status;
+    pill.textContent = pillLabel(status);
+    tr.dataset.status = status;
+    fetch('/admin/applications/' + encodeURIComponent(id) + '/status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ status: status })
+    }).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      updateCounts();
+      applyFilter(getActiveTab());
+    }).catch(function() {
+      pill.dataset.status = prev;
+      pill.textContent = pillLabel(prev);
+      tr.dataset.status = prev;
+      alert('Could not update status. Please try again.');
+    });
+  }
+
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('.status-dropdown')) return;
+    var pill = e.target.closest('.status-pill');
+    if (pill) {
+      var existing = pill.parentElement.querySelector('.status-dropdown');
+      if (existing) { closeDropdowns(); return; }
+      openDropdown(pill);
+    } else {
+      closeDropdowns();
+    }
+  });
+
+  document.querySelectorAll('.tab').forEach(function(t) {
+    t.addEventListener('click', function() { setActiveTab(t.dataset.tab); });
+  });
+
+  updateCounts();
+  setActiveTab(getActiveTab());
+})();
+</script>
 </body>
 </html>`);
   } catch (err) {
     console.error('Admin error:', err);
     res.status(500).send('Server error');
+  }
+});
+
+/* PATCH /admin/applications/:id/status – update lead status */
+app.patch('/admin/applications/:id/status', basicAuth, async (req, res) => {
+  const { status } = req.body || {};
+  if (!STATUSES.includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE applications SET status = $1 WHERE id = $2 RETURNING id, status`,
+      [status, req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ success: true, id: rows[0].id, status: rows[0].status });
+  } catch (err) {
+    console.error('Status update error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
